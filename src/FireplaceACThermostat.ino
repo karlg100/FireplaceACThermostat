@@ -1,17 +1,149 @@
-// This #include statement was automatically added by the Particle IDE.
+#include <Particle.h>
+
+// Support for Rotary Encoder input
 #include <Encoder.h>
 
-// This #include statement was automatically added by the Particle IDE.
-#include <Grove_4Digit_Display.h>
+// Support for I2C
+//include <Wire.h>
 
-// This #include statement was automatically added by the Particle IDE.
+// Support for Temp/Humidity sensor
 #include <Adafruit_Si7021.h>
 
-// This #include statement was automatically added by the Particle IDE.
+// support for PID controller
 #include <pid.h>
 
-Adafruit_Si7021 sensor = Adafruit_Si7021();
+// OLED output support
+#include <SPI.h>
+#include <Adafruit_GFX_RK.h>
+#include <Adafruit_SSD1306_RK.h>
 
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+#define OLED_RESET    D6 // Reset pin # (or -1 if sharing Arduino reset pin)
+
+#define LOGO_HEIGHT   16
+#define LOGO_WIDTH    16
+
+#define REFRESH_DELAY 300
+
+static const unsigned char PROGMEM flame1_bmp[] = {
+    B00000001, B00000000,
+    B00000011, B10000000,
+    B00000001, B10000000,
+    B00000001, B11000000,
+    B00000111, B11000000,
+    B00001111, B11000110,
+    B00001111, B11101100,
+    B00001011, B11111100,
+    B01011010, B01111100,
+    B01110010, B00110110,
+    B01100000, B00100100,
+    B00100000, B01100100,
+    B00110100, B00001100,
+    B00010110, B10001000,
+    B00011011, B00001000,
+    B00001111, B11110000};
+
+static const unsigned char PROGMEM flame2_bmp[] =
+    {B00001000, B00000000,
+     B00000110, B00000000,
+     B00000011, B00000000,
+     B00000011, B10100010,
+     B00000001, B11000001,
+     B00000111, B11000110,
+     B01001111, B11101100,
+     B10001011, B11111100,
+     B01011010, B01111101,
+     B01110001, B00110110,
+     B01100011, B00100100,
+     B00100000, B01100100,
+     B00110100, B01001100,
+     B00010110, B00101000,
+     B00011011, B10011000,
+     B00001111, B11110000};
+
+static const unsigned char PROGMEM flame3_bmp[] =
+    {B00000000, B00000000,
+     B00000110, B00000000,
+     B00011011, B01100010,
+     B00000011, B10010100,
+     B00000001, B11001000,
+     B01000011, B11001100,
+     B00101111, B11111100,
+     B01001011, B11111100,
+     B01011011, B01111100,
+     B01110001, B00110110,
+     B00111000, B00100101,
+     B00111000, B00101100,
+     B00011001, B00001000,
+     B00010010, B00001000,
+     B00011011, B10011000,
+     B00001111, B11110000};
+
+static const unsigned char PROGMEM flame4_bmp[] =
+    {B00000001, B10000000,
+     B00000010, B00010000,
+     B00000011, B00101000,
+     B00100011, B10001000,
+     B00010001, B11000100,
+     B00100011, B11001100,
+     B00010111, B11111100,
+     B00011111, B11111100,
+     B00111011, B01111100,
+     B00110001, B00110100,
+     B00111111, B00100100,
+     B00111001, B00101100,
+     B00011010, B10011100,
+     B00010010, B01001100,
+     B00011011, B00111000,
+     B00000111, B11110000};
+
+/*
+static const unsigned char PROGMEM flame1_bmp[] =
+{ B00010110, B00000000,
+  B01001100, B10000000,
+  B00100100, B00000000,
+  B00101110, B01000000,
+  B00101110, B11000000,
+  B00111111, B10000000,
+  B10111011, B10000000,
+  B10110111, B10000000,
+  B10110101, B11000000,
+  B11110110, B11000000,
+  B11100110, B11000000,
+  B11000010, B11000000,
+  B11000000, B11000000,
+  B11101001, B11000000,
+  B01111111, B10000000,
+  B00111111, B00000000 };
+
+static const unsigned char PROGMEM flame2_bmp[] =
+{ B01000100, B10000000,
+  B00101100, B00000000,
+  B00010010, B00000000,
+  B00110110, B01000000,
+  B10011110, B11000000,
+  B10111111, B10000000,
+  B00111011, B10000000,
+  B00110101, B10000000,
+  B10110001, B11000000,
+  B11110011, B11000000,
+  B11101000, B11000000,
+  B11011000, B11000000,
+  B11001000, B11000000,
+  B11100001, B11000000,
+  B01111111, B10000000,
+  B00111111, B00000000 };
+*/
+
+size_t lastOLEDRefresh = 0;
+
+Adafruit_Si7021 sensor(&Wire1);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// temp limits
 #define MIN_TEMP 30
 #define MAX_TEMP 80
 #define DEFAULT_TARGETTEMP 70
@@ -28,11 +160,6 @@ double consKp=1, consKi=0.05, consKd=0.25;
 //Specify the links and initial tuning parameters
 PID myPID(&Input, &Output, &Setpoint, consKp, consKi, consKd, PID::DIRECT);
 
-// LCD display
-#define CLK D2//pins definitions for TM1637 and can be changed to other ports
-#define DIO D3
-TM1637 tm1637(CLK,DIO);
-
 // time tracking vars
 size_t lastReport = 0;
 size_t overrideTimer = 0;
@@ -44,9 +171,6 @@ Encoder myEnc(D4, D5);
 //   avoid using pins with LEDs attached
 
 
-//define ROTARY_ANGLE_SENSOR A0
-//define ROTARY_DEBOUNCE 200
-//int lastManualTemp = 0;
 long lastRotary = 0;
 //define OVERRIDE_TIME 10000
 #define OVERRIDE_TIME 3600000
@@ -57,7 +181,6 @@ String temp;
 int manualTemp;
 int targetTemp;
 bool heating = false;
-
 
 // EEPROM state struct and handlers
 // Struct for storing state in RAM and EEPROM
@@ -79,7 +202,7 @@ bool readCfg()
   //uint8_t* _data     = &cfgData;
   int      _chkSum   = 0;
 
-  for (int i = 0; i < sizeof(cfgData); i++)
+  for (unsigned int i = 0; i < sizeof(cfgData); i++)
   {
     _data[i] = EEPROM.read(CFG_BASE + i);
     if (i < sizeof(cfgData) - sizeof(_chkSum))
@@ -94,7 +217,7 @@ int writeCfg()
   //uint8_t* _data = &cfgData;
   cfgData.checkSum = 0;
 
-  for (int i = 0; i < sizeof(cfgData); i++)
+  for (unsigned int i = 0; i < sizeof(cfgData); i++)
   {
     EEPROM.write(CFG_BASE + i, _data[i]);
     if (i < sizeof(cfgData) - sizeof(cfgData.checkSum))
@@ -114,10 +237,10 @@ bool validCfg() {
     return true;
 }
 
-int initCfg() {
+void initCfg() {
     cfgData.targetTemp = DEFAULT_TARGETTEMP;
     writeCfg();
-    Particle.publish("EEPROM", "New state initialized and written");
+    Particle.publish("EEPROM", String("New state initialized and written"), PRIVATE);
 }
 
 int setTargetTemp(String tempValue) {
@@ -128,41 +251,107 @@ int setTargetTemp(String tempValue) {
     return cfgData.targetTemp;
 }
 
+// OLED functions
+void displayString(String msg) {
+    // Clear the buffer
+    display.clearDisplay();
+
+    display.setTextSize(2);             // Normal 1:1 pixel scale
+    display.setTextColor(WHITE);        // Draw white text
+    display.setCursor(20,0);             // Start at top-left corner
+    display.println(msg);
+}
+
+void printTemp(int f) {
+  display.setTextSize(2);             // Normal 1:1 pixel scale
+  display.setTextColor(WHITE);        // Draw white text
+  display.setCursor(20,0);             // Start at top-left corner
+  display.println(String(f)+(char)247+"F");
+}
+
+void printSetPt(int f) {
+  display.setTextSize(1);             // Normal 1:1 pixel scale
+  display.setTextColor(WHITE);        // Draw white text
+  display.setCursor(80,0);             // Start at top-left corner
+  display.println(String(f)+(char)247+"F");
+}
+
+void printMode(String mode) {
+  display.setTextSize(1);             // Normal 1:1 pixel scale
+  display.setTextColor(BLACK, WHITE);        // Draw white text
+  display.setCursor(80,9);             // Start at top-left corner
+  display.println(mode);
+}
+
+#define FLAMES 8
+int flame[FLAMES];
+
+
+void drawFire() {
+  for (int x=0; x<FLAMES; x++) {
+      if (flame[x] < 1 || flame[x] > 4)
+        flame[x] = random(1,5);
+      if (flame[x] == 1)
+        display.drawBitmap(
+          x*LOGO_WIDTH,
+          (display.height() - LOGO_HEIGHT),
+          flame1_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
+      else if (flame[x] == 2)
+        display.drawBitmap(
+          x*LOGO_WIDTH,
+          (display.height() - LOGO_HEIGHT),
+          flame2_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
+      else if (flame[x] == 3)
+        display.drawBitmap(
+          x*LOGO_WIDTH,
+          (display.height() - LOGO_HEIGHT),
+          flame3_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
+      else if (flame[x] == 4)
+        display.drawBitmap(
+          x*LOGO_WIDTH,
+          (display.height() - LOGO_HEIGHT),
+          flame4_bmp, LOGO_WIDTH, LOGO_HEIGHT, 1);
+        flame[x]++;
+      if (flame[x] > 4)
+        flame[x] = 1;
+  }
+}
+
 void setup() {
+    if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3C for 128x32
+      Serial.println(F("SSD1306 allocation failed"));
+      for(;;); // Don't proceed, loop forever
+    }
+
+    displayString("Booting...");
+
     // set BLE to high power
     BLE.setTxPower(8);
     Particle.publishVitals(3600);
-    
+
     if (!sensor.begin()) {
-        Particle.publish("Status", "Did not find Si7021 sensor!");
+        Particle.publish("Status", String("Did not find Si7021 sensor!"), PRIVATE);
 //        while (true)
 //            ;
     }
 
     // retrieve values from EEPROM or init if needed
     if ( !readCfg() ) {
-        Particle.publish("EEPROM", "State failed checksum from EEPROM");
+        Particle.publish("EEPROM", String("State failed checksum from EEPROM"), PRIVATE);
         initCfg();
-    } else
-        Particle.publish("EEPROM", "State successfully loaded from EEPROM");
+    } else {
+        Particle.publish("EEPROM", String("State successfully loaded from EEPROM"), PRIVATE);
+    }
     if ( !validCfg() ) {
-        Particle.publish("EEPROM", "State values are out of range");
+        Particle.publish("EEPROM", String("State values are out of range"), PRIVATE);
         initCfg();
     } else
-        Particle.publish("EEPROM", "State has valid values");
+        Particle.publish("EEPROM", String("State has valid values"), PRIVATE);
 
     Particle.function("setTargetTemp", setTargetTemp);
     Particle.variable("getTargetTemp", &targetTemp, INT);
     Particle.variable("getConfigTemp", &cfgData.targetTemp, INT);
 
-    // Angle sensor
-    //pinMode(ROTARY_ANGLE_SENSOR, INPUT);
-
-    // init the display
-    tm1637.init();
-    tm1637.set(BRIGHT_TYPICAL);//BRIGHT_TYPICAL = 2,BRIGHT_DARKEST = 0,BRIGHTEST = 7;
-    tm1637.point(POINT_OFF);
-    
     // get initial telem
     myEnc.write(0);
     lastRotary = 0;
@@ -183,31 +372,20 @@ void setup() {
 }
 
 void getTelem() {
-
-/*    
-    // for pot on analog pins
-    if (analogRead(ROTARY_ANGLE_SENSOR) <= lastRotary + ROTARY_DEBOUNCE && analogRead(ROTARY_ANGLE_SENSOR) >= lastRotary - ROTARY_DEBOUNCE)
-        manualTemp = MIN_TEMP + int((MAX_TEMP + 1 - MIN_TEMP) * (4095-lastRotary)/4095);
-    else {
-        lastRotary = analogRead(ROTARY_ANGLE_SENSOR);
-        manualTemp = MIN_TEMP + int((MAX_TEMP + 1 - MIN_TEMP) * (4095-analogRead(ROTARY_ANGLE_SENSOR))/4095);
-    }
-//    manualTemp = MIN_TEMP + int((MAX_TEMP + 1 - MIN_TEMP) * (4095-lastRotary)/4095);
-*/
-
     // get temp
     f = sensor.readTemperature() * 1.8 + 32.0;
     temp = String(f);
     
     // verify we haven't wrapped millis(), if so reset overrideTimer to 1 to trigger below
     if (overrideTimer > 0 && millis() < overrideTimer - OVERRIDE_TIME) {
-        Particle.publish("override", "millis() wrapped!  triggering override timer reset");
+        Particle.publish("override", String("millis() wrapped!  triggering override timer reset"), PRIVATE);
         overrideTimer = 1;
     }
 
     // reset encoder back to current setpoint if overrideTimer is over
     if (overrideTimer > 0 && overrideTimer < millis()) {
         overrideTimer = 0;
+        lastOLEDRefresh = 0;
         myEnc.write(0);
         lastRotary = 0;
         manualTemp = cfgData.targetTemp;
@@ -228,32 +406,24 @@ void getTelem() {
     }
 }
 
-// decide if we need to be on or off
-// decide if we are manual override, or back to homeKit set temp
+// decide if Heating need to be on or off
+// decide if we are manual override, or back to particle varilabe temp setpoint
 void checkTemp() {
-/*
-    if (manualTemp != lastManualTemp) {
-        lastManualTemp = manualTemp;
-    }
-*/
-
     if (overrideTimer != 0 && overrideTimer > millis()) {
         targetTemp = manualTemp;
-        tm1637.set(BRIGHT_TYPICAL);//BRIGHT_TYPICAL = 2,BRIGHT_DARKEST = 0,BRIGHTEST = 7;
+//        tm1637.set(BRIGHT_TYPICAL);//BRIGHT_TYPICAL = 2,BRIGHT_DARKEST = 0,BRIGHTEST = 7;
     } else {
         targetTemp = cfgData.targetTemp;
-        tm1637.set(BRIGHT_DARKEST);//BRIGHT_TYPICAL = 2,BRIGHT_DARKEST = 0,BRIGHTEST = 7;
+//        tm1637.set(BRIGHT_DARKEST);//BRIGHT_TYPICAL = 2,BRIGHT_DARKEST = 0,BRIGHTEST = 7;
     }
 
     // decide if we need to heat or not
     if (temp.toInt() >= targetTemp + SWING_TEMP) {
         heating = false;
         digitalWrite(D7, LOW);
-        tm1637.point(POINT_OFF);
     } else if (temp.toInt() <= targetTemp - SWING_TEMP) {
         heating = true;
         digitalWrite(D7, HIGH);
-        tm1637.point(POINT_ON);
     }
 
    // PID routine
@@ -265,25 +435,31 @@ void checkTemp() {
 void publishTelem() {
     if (lastReport + 5000 < millis()) {
 //        Particle.publish("Humidity", String(sensor.readHumidity()));
-        Particle.publish("Temperature", temp);
-        Particle.publish("TargetTemp", String(targetTemp));
+        Particle.publish("Temperature", String(temp), PRIVATE);
+        Particle.publish("TargetTemp", String(targetTemp), PRIVATE);
         if (heating) {
-            Particle.publish("Heating", "On");
-            Mesh.publish("Heating", "On");
+            Particle.publish("Heating", String("On"), PRIVATE);
+            Mesh.publish("Heating", String("On"));
         } else {
-            Particle.publish("Heating", "Off");
-            Mesh.publish("Heating", "Off");
+            Particle.publish("Heating", String("Off"), PRIVATE);
+            Mesh.publish("Heating", String("Off"));
         }
 
-        Particle.publish("PID", String(Output));
+        Particle.publish("PID", String(Output), PRIVATE);
 
         lastReport = millis();
     }
-    
-    tm1637.display(2,String(String(targetTemp).charAt(0)).toInt());
-    tm1637.display(3,String(String(targetTemp).charAt(1)).toInt());
-    tm1637.display(0,String(temp.charAt(0)).toInt());
-    tm1637.display(1,String(temp.charAt(1)).toInt());
+
+    if (lastOLEDRefresh + REFRESH_DELAY < millis())
+    {
+        display.clearDisplay();
+        if (heating)
+            drawFire();
+        printTemp(temp.toInt());
+        printSetPt(targetTemp);
+        printMode("HEAT");
+        display.display();
+    }
 }
 
 void loop() {
