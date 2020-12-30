@@ -182,10 +182,29 @@ int manualTemp;
 int targetTemp;
 bool heating = false;
 
+// Modes
+// 0 - Off
+#define MODE_OFF 0
+#define MODE_OFF_TXT "Off"
+// 1 - Heating
+#define MODE_HEAT 1
+#define MODE_HEAT_TXT "Heat"
+// 2 - Cool (not yet supported)
+#define MODE_COOL 2
+#define MODE_COOL_TXT "Cool"
+// 3 - Auto
+#define MODE_AUTO 3
+#define MODE_AUTO_TXT "Auto"
+#define DEFAULT_MODE 0
+#define MODE_MIN 0
+#define MODE_MAX 1
+
 // EEPROM state struct and handlers
 // Struct for storing state in RAM and EEPROM
 struct CCState {
     int magicNumber = 0xC10000; // this should change when struct changes
+
+    int mode;
 
     // Target temp to maintain output at
     int targetTemp;
@@ -233,22 +252,41 @@ bool validCfg() {
     if (cfgData.targetTemp > MAX_TEMP)
         return false;
 
+    if (cfgData.mode < MODE_MIN)
+        return false;
+    if (cfgData.mode > MODE_MAX)
+        return false;
+
     // everything looks good!  We can use these values
     return true;
 }
 
 void initCfg() {
     cfgData.targetTemp = DEFAULT_TARGETTEMP;
+    cfgData.targetTemp = DEFAULT_MODE;
     writeCfg();
     Particle.publish("EEPROM", String("New state initialized and written"), PRIVATE);
 }
 
 int setTargetTemp(String tempValue) {
-    cfgData.targetTemp = tempValue.toInt();
-    targetTemp = tempValue.toInt();
-    overrideTimer = 0;
-    writeCfg();
-    return cfgData.targetTemp;
+    if (tempValue.toInt() >= MIN_TEMP && tempValue.toInt() <= MAX_TEMP) {
+        cfgData.targetTemp = tempValue.toInt();
+        targetTemp = tempValue.toInt();
+        overrideTimer = 0;
+        writeCfg();
+        return cfgData.targetTemp;
+    } else
+        return false;
+}
+
+int setMode(String modeValue) {
+    if (modeValue.toInt() >= MODE_MIN && modeValue.toInt() <= MODE_MAX) {
+        cfgData.mode = modeValue.toInt();
+        overrideTimer = 0;
+        writeCfg();
+        return cfgData.mode;
+    } else
+        return false;
 }
 
 // OLED functions
@@ -266,26 +304,36 @@ void printTemp(int f) {
   display.setTextSize(2);             // Normal 1:1 pixel scale
   display.setTextColor(WHITE);        // Draw white text
   display.setCursor(20,0);             // Start at top-left corner
-  display.println(String(f)+(char)247+"F");
+  display.println(String(f)+(char)247+"F/");
+}
+
+void printClearTemp() {
+  display.setTextSize(2);             // Normal 1:1 pixel scale
+  display.setTextColor(WHITE);        // Draw white text
+  display.setCursor(20,0);             // Start at top-left corner
+  display.println(String("    "));
 }
 
 void printSetPt(int f) {
-  display.setTextSize(1);             // Normal 1:1 pixel scale
+  display.setTextSize(2);             // Normal 1:1 pixel scale
   display.setTextColor(WHITE);        // Draw white text
   display.setCursor(80,0);             // Start at top-left corner
   display.println(String(f)+(char)247+"F");
 }
 
 void printMode(String mode) {
-  display.setTextSize(1);             // Normal 1:1 pixel scale
-  display.setTextColor(BLACK, WHITE);        // Draw white text
-  display.setCursor(80,9);             // Start at top-left corner
+  display.setTextSize(2);             // Normal 1:1 pixel scale
+  if (heating)
+    display.setTextColor(BLACK);        // Draw white text
+  else
+    display.setTextColor(WHITE);        // Draw white text
+  //display.setTextColor(BLACK, WHITE);        // Draw white text
+  display.setCursor(44,18);             // Start at top-left corner
   display.println(mode);
 }
 
 #define FLAMES 8
 int flame[FLAMES];
-
 
 void drawFire() {
   for (int x=0; x<FLAMES; x++) {
@@ -320,6 +368,7 @@ void drawFire() {
 void setup() {
     if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3C for 128x32
       Serial.println(F("SSD1306 allocation failed"));
+      Particle.publish("Status", String("Did not find SSD1306 display!"), PRIVATE);
       for(;;); // Don't proceed, loop forever
     }
 
@@ -349,6 +398,7 @@ void setup() {
         Particle.publish("EEPROM", String("State has valid values"), PRIVATE);
 
     Particle.function("setTargetTemp", setTargetTemp);
+    Particle.function("setMode", setMode);
     Particle.variable("getTargetTemp", &targetTemp, INT);
     Particle.variable("getConfigTemp", &cfgData.targetTemp, INT);
 
@@ -418,12 +468,20 @@ void checkTemp() {
     }
 
     // decide if we need to heat or not
-    if (temp.toInt() >= targetTemp + SWING_TEMP) {
+    if (cfgData.mode == MODE_HEAT || cfgData.mode == MODE_AUTO) {
+        if (temp.toInt() >= targetTemp + SWING_TEMP) {
+            heating = false;
+            digitalWrite(D7, LOW);
+        } else if (temp.toInt() <= targetTemp - SWING_TEMP) {
+            heating = true;
+            digitalWrite(D7, HIGH);
+        }
+    }
+
+    // if we're off or cooling, stop heating
+    if (cfgData.mode == MODE_OFF || cfgData.mode == MODE_COOL) {
         heating = false;
         digitalWrite(D7, LOW);
-    } else if (temp.toInt() <= targetTemp - SWING_TEMP) {
-        heating = true;
-        digitalWrite(D7, HIGH);
     }
 
    // PID routine
@@ -432,20 +490,28 @@ void checkTemp() {
     myPID.Compute();
 }
 
+int updateSet = 0;
 void publishTelem() {
     if (lastReport + 5000 < millis()) {
-//        Particle.publish("Humidity", String(sensor.readHumidity()));
-        Particle.publish("Temperature", String(temp), PRIVATE);
-        Particle.publish("TargetTemp", String(targetTemp), PRIVATE);
         if (heating) {
-            Particle.publish("Heating", String("On"), PRIVATE);
-            Mesh.publish("Heating", String("On"));
+            Particle.publish("LivingroomHeating", String("On"), PRIVATE);
+            //Mesh.publish("Heating", String("On"));
         } else {
-            Particle.publish("Heating", String("Off"), PRIVATE);
-            Mesh.publish("Heating", String("Off"));
+            Particle.publish("LivingroomHeating", String("Off"), PRIVATE);
+            //Mesh.publish("Heating", String("Off"));
+        }
+        Particle.publish("TargetTemp", String(targetTemp), PRIVATE);
+        Particle.publish("Mode", String(cfgData.mode), PRIVATE);
+        if (updateSet == 0) {
+            Particle.publish("Humidity", String(sensor.readHumidity()), PRIVATE);
+            updateSet = 1;
+        } else {
+            // noting
+            updateSet = 0;
+            Particle.publish("Temperature", String(temp), PRIVATE);
         }
 
-        Particle.publish("PID", String(Output), PRIVATE);
+        //Particle.publish("PID", String(Output), PRIVATE);
 
         lastReport = millis();
     }
@@ -457,8 +523,24 @@ void publishTelem() {
             drawFire();
         printTemp(temp.toInt());
         printSetPt(targetTemp);
-        printMode("HEAT");
+        if (cfgData.mode == MODE_OFF) {
+            printMode(MODE_OFF_TXT);
+            printClearTemp();
+        }
+        if (cfgData.mode == MODE_HEAT) {
+            printMode(MODE_HEAT_TXT);
+            printSetPt(targetTemp);
+        }
+        if (cfgData.mode == MODE_COOL) {
+            printMode(MODE_COOL_TXT);
+            printSetPt(targetTemp);
+        }
+        if (cfgData.mode == MODE_AUTO) {
+            printMode(MODE_AUTO_TXT);
+            printSetPt(targetTemp);
+        }
         display.display();
+        lastOLEDRefresh = millis();
     }
 }
 
